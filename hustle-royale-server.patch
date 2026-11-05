@@ -1,0 +1,273 @@
+From c63dc40b8e249afc71116818923b74b955480f3f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 5 Nov 2026 03:55:02 +0000
+Subject: [PATCH] feat(starter-pack): POST /starter-pack/open with server-side
+ roll
+
+- one tank, healer and dps per pack; weighted rarity/grade, legendary excluded
+- respects supply caps; retries if a template sells out mid-open
+- unit tests for the roll
+---
+ README.md                             |  2 +-
+ src/app.ts                            |  3 +
+ src/modules/starter-pack/roll.test.ts | 64 ++++++++++++++++++++
+ src/modules/starter-pack/roll.ts      | 87 +++++++++++++++++++++++++++
+ src/modules/starter-pack/routes.ts    | 48 +++++++++++++++
+ 5 files changed, 203 insertions(+), 1 deletion(-)
+ create mode 100644 src/modules/starter-pack/roll.test.ts
+ create mode 100644 src/modules/starter-pack/roll.ts
+ create mode 100644 src/modules/starter-pack/routes.ts
+
+diff --git a/README.md b/README.md
+index 6744cb1..616b06f 100644
+--- a/README.md
++++ b/README.md
+@@ -22,7 +22,7 @@ src/
+   config/env.ts           validated environment
+   plugins/                supabase (service role), auth (JWT verification), socket (Socket.IO + auth)
+   engine/                 pure combat simulation: no network, no database, fully unit-tested
+-  modules/                (next) starter-pack, fighters, progression, training, marketplace, economy, battle
++  modules/                starter-pack (POST /starter-pack/open); next: fighters, progression, training, marketplace, economy, battle
+ ```
+ 
+ ## Combat engine
+diff --git a/src/app.ts b/src/app.ts
+index c572cfb..9ca4a65 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
+ import type { Env } from "./config/env.js";
+ import { requireUser } from "./plugins/auth.js";
+ import { attachSocket } from "./plugins/socket.js";
++import { registerStarterPackRoutes } from "./modules/starter-pack/routes.js";
+ import { createAdminClient } from "./plugins/supabase.js";
+ 
+ export async function buildApp(env: Env): Promise<FastifyInstance> {
+@@ -20,6 +21,8 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
+   // Smoke-test endpoint for the auth wiring; real routes live in src/modules/*.
+   app.get("/me", { preHandler: requireUser(supabase) }, async (req) => ({ userId: req.user!.id }));
+ 
++  registerStarterPackRoutes(app, supabase);
++
+   await app.ready();
+   attachSocket(app, env, supabase);
+   return app;
+diff --git a/src/modules/starter-pack/roll.test.ts b/src/modules/starter-pack/roll.test.ts
+new file mode 100644
+index 0000000..aaae838
+--- /dev/null
++++ b/src/modules/starter-pack/roll.test.ts
+@@ -0,0 +1,64 @@
++import { describe, expect, it } from "vitest";
++import { createRng } from "../../engine/rng.js";
++import { GRADE_MULTIPLIER, PACK_ROLES, rollStarterPack, type FighterTemplate } from "./roll.js";
++
++const base = { base_hp: 100, base_atk: 10, base_def: 10, base_spd: 10, base_stamina: 10, base_magic: 10 };
++const t = (id: string, role: FighterTemplate["role"], rarity: FighterTemplate["rarity"], extra: Partial<FighterTemplate> = {}): FighterTemplate => ({
++  id,
++  role,
++  rarity,
++  supply_cap: null,
++  minted: 0,
++  ...base,
++  ...extra,
++});
++
++const catalog = [
++  t("tank-c", "tank", "common"),
++  t("tank-r", "tank", "rare", { supply_cap: 500 }),
++  t("tank-l", "tank", "legendary", { supply_cap: 50 }),
++  t("heal-c", "healer", "common"),
++  t("heal-u", "healer", "uncommon", { supply_cap: 5000 }),
++  t("dps-c", "dps", "common"),
++  t("dps-r", "dps", "rare", { supply_cap: 500 }),
++];
++
++describe("rollStarterPack", () => {
++  it("returns one fighter per role, in slot order", () => {
++    const pack = rollStarterPack(catalog, createRng(1));
++    expect(pack).toHaveLength(3);
++    const roles = pack.map((p) => catalog.find((c) => c.id === p.template_id)!.role);
++    expect(roles).toEqual(PACK_ROLES);
++  });
++
++  it("is deterministic for a given seed", () => {
++    expect(rollStarterPack(catalog, createRng(42))).toEqual(rollStarterPack(catalog, createRng(42)));
++  });
++
++  it("never hands out legendaries or sold-out templates", () => {
++    const soldOut = catalog.map((c) => (c.id === "tank-r" ? { ...c, minted: 500 } : c));
++    for (let seed = 0; seed < 500; seed++) {
++      for (const p of rollStarterPack(soldOut, createRng(seed))) {
++        expect(p.template_id).not.toBe("tank-l");
++        expect(p.template_id).not.toBe("tank-r");
++      }
++    }
++  });
++
++  it("keeps stats inside the grade multiplier and variance band", () => {
++    for (let seed = 0; seed < 200; seed++) {
++      for (const p of rollStarterPack(catalog, createRng(seed))) {
++        const mult = GRADE_MULTIPLIER[p.grade];
++        for (const stat of [p.hp, p.atk, p.def, p.spd, p.stamina, p.magic]) {
++          expect(stat).toBeGreaterThanOrEqual(1);
++        }
++        expect(p.hp).toBeGreaterThanOrEqual(Math.floor(100 * mult * 0.95));
++        expect(p.hp).toBeLessThanOrEqual(Math.ceil(100 * mult * 1.05));
++      }
++    }
++  });
++
++  it("throws when a role has nothing available", () => {
++    expect(() => rollStarterPack(catalog.filter((c) => c.role !== "healer"), createRng(1))).toThrow("no_templates_for_role:healer");
++  });
++});
+diff --git a/src/modules/starter-pack/roll.ts b/src/modules/starter-pack/roll.ts
+new file mode 100644
+index 0000000..f68e1c8
+--- /dev/null
++++ b/src/modules/starter-pack/roll.ts
+@@ -0,0 +1,87 @@
++import { randomInt } from "node:crypto";
++import type { Rng, Role } from "../../engine/types.js";
++
++export type Rarity = "common" | "uncommon" | "rare" | "legendary";
++export type Grade = "E" | "D" | "C" | "B" | "A";
++
++export interface FighterTemplate {
++  id: string;
++  role: Role;
++  rarity: Rarity;
++  base_hp: number;
++  base_atk: number;
++  base_def: number;
++  base_spd: number;
++  base_stamina: number;
++  base_magic: number;
++  supply_cap: number | null;
++  minted: number;
++}
++
++/** Payload shape expected by the `open_starter_pack` database function. */
++export interface PackFighter {
++  template_id: string;
++  grade: Grade;
++  hp: number;
++  atk: number;
++  def: number;
++  spd: number;
++  stamina: number;
++  magic: number;
++}
++
++/** Balance knobs for the starter pack. Legendary is intentionally not obtainable here. */
++export const PACK_RARITY_WEIGHTS: Partial<Record<Rarity, number>> = { common: 70, uncommon: 25, rare: 5 };
++export const PACK_GRADE_WEIGHTS: Record<Grade, number> = { E: 40, D: 30, C: 20, B: 8, A: 2 };
++export const GRADE_MULTIPLIER: Record<Grade, number> = { E: 0.9, D: 1, C: 1.1, B: 1.2, A: 1.35 };
++export const STAT_VARIANCE = 0.05; // +-5% on every stat
++
++/** The pack always contains one fighter per role, in team-slot order. */
++export const PACK_ROLES: Role[] = ["tank", "healer", "dps"];
++
++/** Cryptographically strong RNG for real packs. Tests pass a seeded one instead. */
++export const secureRng: Rng = { next: () => randomInt(0, 2 ** 32) / 2 ** 32 };
++
++function weightedPick<T>(entries: [T, number][], rng: Rng): T {
++  const total = entries.reduce((sum, [, w]) => sum + w, 0);
++  let roll = rng.next() * total;
++  for (const [value, weight] of entries) {
++    roll -= weight;
++    if (roll < 0) return value;
++  }
++  return entries[entries.length - 1]![0];
++}
++
++const isAvailable = (t: FighterTemplate) => t.supply_cap === null || t.minted < t.supply_cap;
++
++function rollStat(base: number, grade: Grade, rng: Rng): number {
++  const variance = 1 - STAT_VARIANCE + rng.next() * STAT_VARIANCE * 2;
++  return Math.max(1, Math.round(base * GRADE_MULTIPLIER[grade] * variance));
++}
++
++export function rollStarterPack(templates: FighterTemplate[], rng: Rng = secureRng): PackFighter[] {
++  return PACK_ROLES.map((role) => {
++    const pool = templates.filter((t) => t.role === role && isAvailable(t) && PACK_RARITY_WEIGHTS[t.rarity]);
++    if (pool.length === 0) throw new Error(`no_templates_for_role:${role}`);
++
++    const rarities = [...new Set(pool.map((t) => t.rarity))];
++    const rarity = weightedPick(
++      rarities.map((r): [Rarity, number] => [r, PACK_RARITY_WEIGHTS[r]!]),
++      rng,
++    );
++    const ofRarity = pool.filter((t) => t.rarity === rarity);
++    const template = ofRarity[Math.min(ofRarity.length - 1, Math.floor(rng.next() * ofRarity.length))]!;
++
++    const grade = weightedPick(Object.entries(PACK_GRADE_WEIGHTS) as [Grade, number][], rng);
++    return {
++      template_id: template.id,
++      grade,
++      hp: rollStat(template.base_hp, grade, rng),
++      atk: rollStat(template.base_atk, grade, rng),
++      def: rollStat(template.base_def, grade, rng),
++      spd: rollStat(template.base_spd, grade, rng),
++      stamina: rollStat(template.base_stamina, grade, rng),
++      magic: rollStat(template.base_magic, grade, rng),
++    };
++  });
++}
+diff --git a/src/modules/starter-pack/routes.ts b/src/modules/starter-pack/routes.ts
+new file mode 100644
+index 0000000..5facad7
+--- /dev/null
++++ b/src/modules/starter-pack/routes.ts
+@@ -0,0 +1,48 @@
++import type { SupabaseClient } from "@supabase/supabase-js";
++import type { FastifyInstance } from "fastify";
++import { requireUser } from "../../plugins/auth.js";
++import { rollStarterPack, type FighterTemplate } from "./roll.js";
++
++const MAX_ATTEMPTS = 3; // a capped template can sell out between our read and the write
++
++export function registerStarterPackRoutes(app: FastifyInstance, supabase: SupabaseClient) {
++  app.post(
++    "/starter-pack/open",
++    {
++      preHandler: requireUser(supabase),
++      config: { rateLimit: { max: 6, timeWindow: "1 minute" } },
++    },
++    async (req, reply) => {
++      const userId = req.user!.id;
++
++      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
++        const { data: templates, error: catalogError } = await supabase
++          .from("fighter_templates")
++          .select("id, role, rarity, base_hp, base_atk, base_def, base_spd, base_stamina, base_magic, supply_cap, minted");
++        if (catalogError || !templates) {
++          req.log.error({ err: catalogError }, "starter pack: catalog read failed");
++          return reply.code(500).send({ error: "catalog_unavailable" });
++        }
++
++        let pack;
++        try {
++          pack = rollStarterPack(templates as FighterTemplate[]);
++        } catch (err) {
++          req.log.error({ err }, "starter pack: roll failed");
++          return reply.code(500).send({ error: "catalog_incomplete" });
++        }
++
++        const { data, error } = await supabase.rpc("open_starter_pack", { p_user_id: userId, p_fighters: pack });
++        if (!error) return { fighters: data };
++
++        const message = error.message ?? "";
++        if (message.includes("already_opened")) return reply.code(409).send({ error: "already_opened" });
++        if (message.includes("profile_not_found")) return reply.code(404).send({ error: "profile_not_found" });
++        if (message.includes("sold_out") && attempt < MAX_ATTEMPTS) continue; // re-roll against fresh supply
++
++        req.log.error({ err: error }, "starter pack: open failed");
++        return reply.code(500).send({ error: "open_failed" });
++      }
++    },
++  );
++}
+-- 
+2.43.0
