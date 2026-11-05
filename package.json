@@ -1,13 +1,15 @@
 {
-  "name": "hustle-royal-server",
+  "name": "hustle-royale-server",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
-    "test": "vitest"
+    "test": "vitest",
+    "typecheck": "tsc --noEmit",
+    "test:run": "vitest run",
+    "gen:types": "supabase gen types typescript --project-id iezjuxjrnrxnnoffrhvc > src/db/database.types.ts"
   },
   "keywords": [],
   "author": "",
@@ -35,5 +37,6 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
-  }
+  },
+  "private": true
 }
