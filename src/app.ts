@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { Env } from "./config/env.js";
 import { requireUser } from "./plugins/auth.js";
 import { attachSocket } from "./plugins/socket.js";
+import { registerStarterPackRoutes } from "./modules/starter-pack/routes.js";
 import { createAdminClient } from "./plugins/supabase.js";
 
 export async function buildApp(env: Env): Promise<FastifyInstance> {
@@ -19,6 +20,8 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   // Smoke-test endpoint for the auth wiring; real routes live in src/modules/*.
   app.get("/me", { preHandler: requireUser(supabase) }, async (req) => ({ userId: req.user!.id }));
+
+  registerStarterPackRoutes(app, supabase);
 
   await app.ready();
   attachSocket(app, env, supabase);

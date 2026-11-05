@@ -22,7 +22,7 @@ src/
   config/env.ts           validated environment
   plugins/                supabase (service role), auth (JWT verification), socket (Socket.IO + auth)
   engine/                 pure combat simulation: no network, no database, fully unit-tested
-  modules/                (next) starter-pack, fighters, progression, training, marketplace, economy, battle
+  modules/                starter-pack (POST /starter-pack/open); next: fighters, progression, training, marketplace, economy, battle
 ```
 
 ## Combat engine
