@@ -44,3 +44,15 @@ export function maxEnergy(stamina: number): number {
 export function energyRegenPerSec(stamina: number): number {
   return ENERGY_REGEN_BASE + stamina * ENERGY_REGEN_PER_STAMINA;
 }
+
+/** Arena and movement. Units are in arena units; the client scales to pixels. */
+export const ARENA_W = 30;
+export const ARENA_H = 20;
+export const UNIT_RADIUS = 0.6;
+export const CAST_LOCK_BASIC_MS = 150;
+export const CAST_LOCK_SPECIAL_MS = 350;
+
+/** Arena units per second. Speed debuffs slow movement too. */
+export function moveSpeed(spd: number): number {
+  return 3 + Math.max(0, spd) * 0.15;
+}

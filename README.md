@@ -35,6 +35,18 @@ src/
 - Same seed, same battle, so a stored seed plus intents can replay or audit a match.
 - Balance knobs live in `engine/stats.ts`.
 
+### Movement and stances
+
+Fighters live on a 30x20 arena (`ARENA_W/H`); side 1 spawns left, side 2 right, tanks in front and healers at the back, with a little seeded jitter.
+`engine/movement.ts` plans a destination for every unit each tick, and all units plan from the same snapshot, so neither side moves first.
+
+- **Roles:** tanks engage (and body-block for a weak ally on defence), melee DPS close on their target, ranged DPS kite (back off when an enemy gets too close), healers stay inside heal range of the most hurt ally and away from enemies. Wounded fighters fall back to their healer.
+- **Targeting:** scored by distance, missing health, role (DPS hunt healers, tanks draw aggro) and stance, with stickiness so units don't flip targets.
+- **Stances** (`offensive` / `neutral` / `defensive`) change decisions, not stats: how far units chase, how early healers heal, whether energy is spent freely or banked, whether a team holds its line until the enemy commits.
+- **Who sets the stance:** `submitStance(state, side, stance)` works only for a player who is spectating. If the player controls a fighter, or the side is AI, the commander (`runCommander`) picks the stance every 2 s from how the fight is going.
+- **Events:** `move` (changed positions per tick, arena units), `stance`, plus the existing combat events. `snapshot()` includes positions, arena size and stances for late-joining spectators.
+- Skill `range` maps to `skills.range_units` (0 = unlimited, for self and team skills). A queued player cast walks the unit into range, and the intent lasts 3 s.
+
 ## Database
 
 Schema, RLS and the starter catalog live in the Supabase project and are applied as migrations. Players have read-only access to their own data; every write goes through this server.

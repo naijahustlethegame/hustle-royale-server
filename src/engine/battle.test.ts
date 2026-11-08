@@ -4,15 +4,15 @@ import type { BattleEvent, SkillDef, Stats, UnitInit } from "./types.js";
 
 const basic: SkillDef = {
   slug: "basic-strike", kind: "damage", damageType: "physical", power: 1,
-  cooldownMs: 1000, staminaCost: 0, targetRule: "enemy_nearest", effect: {},
+  cooldownMs: 1000, staminaCost: 0, range: 2, targetRule: "enemy_nearest", effect: {},
 };
 const slam: SkillDef = {
   slug: "power-slam", kind: "damage", damageType: "physical", power: 1.8,
-  cooldownMs: 7000, staminaCost: 15, targetRule: "enemy_nearest", effect: {},
+  cooldownMs: 7000, staminaCost: 15, range: 2, targetRule: "enemy_nearest", effect: {},
 };
 const heal: SkillDef = {
   slug: "heal-pulse", kind: "heal", damageType: "magical", power: 1.1,
-  cooldownMs: 6000, staminaCost: 12, targetRule: "ally_lowest_hp", effect: {},
+  cooldownMs: 6000, staminaCost: 12, range: 8, targetRule: "ally_lowest_hp", effect: {},
 };
 
 const stats = (over: Partial<Stats> = {}): Stats => ({ hp: 100, atk: 12, def: 8, spd: 8, stamina: 10, magic: 10, ...over });
